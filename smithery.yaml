@@ -1,0 +1,29 @@
+name: meeting-automation-mcp
+description: Fireflies + Asana + Notion 회의 자동화 MCP 서버
+version: 1.0.0
+author: Ramhori
+license: MIT
+
+# Python MCP 서버 설정
+server:
+  command: python
+  args:
+    - server.py
+
+# 필수 패키지
+dependencies:
+  python: ">=3.8"
+  
+# 카테고리
+tags:
+  - productivity
+  - automation
+  - meetings
+  - fireflies
+  - asana
+  - notion
+
+# 설치 방법
+install:
+  steps:
+    - pip install -r requirements.txt
