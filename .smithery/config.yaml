@@ -1,6 +1,0 @@
-mcpServers:
-  meeting-automation-mcp:
-    command: node
-    args:
-      - index.js
-    env: {}
