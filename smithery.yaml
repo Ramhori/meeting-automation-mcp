@@ -1,9 +1,0 @@
-name: meeting-automation-mcp
-description: Meeting automation with Fireflies, Asana, and Notion
-version: 1.0.0
-license: MIT
-
-server:
-  command: python
-  args:
-    - server.py
