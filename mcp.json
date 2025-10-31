@@ -1,0 +1,34 @@
+{
+  "name": "meeting-automation-mcp",
+  "version": "1.0.0",
+  "description": "Meeting automation with Fireflies, Asana, and Notion",
+  "icon": "📋",
+  "category": "productivity",
+  "vendor": "Ramhori",
+  "sourceUrl": "https://github.com/Ramhori/meeting-automation-mcp",
+  "command": {
+    "type": "node",
+    "command": "npx",
+    "args": ["-y", "meeting-automation-mcp"]
+  },
+  "capabilities": {
+    "tools": [
+      {
+        "name": "guide_meeting_search",
+        "description": "Search Fireflies meetings"
+      },
+      {
+        "name": "guide_meeting_details",
+        "description": "Get meeting details and action items"
+      },
+      {
+        "name": "guide_create_asana_tasks",
+        "description": "Create Asana tasks from action items"
+      },
+      {
+        "name": "guide_save_to_notion",
+        "description": "Save meeting notes to Notion"
+      }
+    ]
+  }
+}
