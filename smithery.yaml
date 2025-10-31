@@ -1,18 +1,9 @@
 name: meeting-automation-mcp
-description: Fireflies + Asana + Notion 회의 자동화 MCP 서버
+description: Meeting automation with Fireflies, Asana, and Notion
 version: 1.0.0
-author: Ramhori
 license: MIT
 
 server:
   command: python
   args:
     - server.py
-
-tags:
-  - productivity
-  - automation
-  - meetings
-  - fireflies
-  - asana
-  - notion
