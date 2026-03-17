@@ -1,288 +1,213 @@
 # Meeting Automation MCP Server
 
-Fireflies, Asana, Notion MCP 서버들을 연결하는 회의 자동화 오케스트레이터
+회의 녹음/텍스트 → STT 전사 → Asana 태스크 → Notion 회의록까지 자동 처리하는 **범용 MCP 서버**.
 
-## 🎯 핵심 개념
-
-이 MCP 서버는 **직접 API를 호출하지 않고**, 기존의 Fireflies, Asana, Notion MCP 서버들을 **중앙에서 조율**하는 역할을 합니다.
+Claude, GPT, Gemini 등 어떤 LLM 클라이언트에서든 사용할 수 있습니다.
 
 ```
-Claude Desktop
-    ↓
-Meeting Automation MCP (오케스트레이터)
-    ↓
-┌─────────────┬─────────────┬─────────────┐
-│ Fireflies   │   Asana     │   Notion    │
-│ MCP Server  │ MCP Server  │ MCP Server  │
-└─────────────┴─────────────┴─────────────┘
+사용자: "회의 자동화해줘"
+         ↓
+  1. VITO API → 전사 (또는 텍스트 직접 입력)
+  2. LLM → 요약 + 액션아이템 추출
+  3. Asana API → 태스크 생성
+  4. Notion API → 회의록 저장
+         ↓
+LLM: "완료! 태스크 N개, Notion 저장됨"
 ```
 
-## 📦 사전 요구사항
+## 설치
 
-### 필수 MCP 서버 설치
-이 서버가 작동하려면 다음 MCP 서버들이 먼저 설치되어 있어야 합니다:
-
-1. **Fireflies MCP Server** - 회의 전사 및 검색 ✅ (Claude Desktop에서 연결)
-2. **Asana MCP Server** - 태스크 관리 ✅ (Claude Desktop에서 연결)
-3. **Notion MCP Server** - 문서화 ✅ (Claude Desktop에서 연결)
-
-> 💡 Claude Desktop의 MCP 설정에서 위 3개 서버가 파란색으로 활성화되어 있는지 확인하세요.
-
-### Python 환경
-- Python 3.10 이상
-
-## 🚀 설치 방법
-
-### 0. 기존 MCP 서버 확인 (필수!)
-
-Claude Desktop을 열고 MCP 설정에서 다음이 활성화되어 있는지 확인:
-- ✅ Fireflies (파란색)
-- ✅ Asana (파란색)
-- ✅ Notion (파란색)
-
-### 1. 저장소 클론 또는 다운로드
 ```bash
 git clone https://github.com/Ramhori/meeting-automation-mcp.git
 cd meeting-automation-mcp
-```
-
-또는 ZIP 파일 다운로드 후 압축 해제
-
-### 2. 의존성 설치
-```bash
 pip install -r requirements.txt
 ```
 
-### 3. Claude Desktop 설정
+## 환경변수 설정
 
-`claude_desktop_config.json` 파일에 **meeting-automation-mcp만** 추가:
+`.env.example`을 복사하여 `.env` 파일을 만들고 실제 값을 입력합니다.
 
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
-**Mac**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+```bash
+cp .env.example .env
+```
+
+| 변수 | 필수 | 설명 |
+|------|------|------|
+| `VITO_CLIENT_ID` | 선택 | VITO STT API 클라이언트 ID (없으면 텍스트 입력만 가능) |
+| `VITO_CLIENT_SECRET` | 선택 | VITO STT API 시크릿 |
+| `ASANA_TOKEN` | 필수 | Asana Personal Access Token |
+| `NOTION_TOKEN` | 필수 | Notion Internal Integration Token |
+| `NOTION_DATABASE_ID` | 필수 | 회의록 저장할 Notion 데이터베이스 ID |
+| `DEFAULT_AUTHOR` | 선택 | 기본 작성자 이름 |
+| `LOG_LEVEL` | 선택 | 로그 레벨 (기본: INFO) |
+
+## MCP 클라이언트 연동
+
+### Claude Desktop
+
+`claude_desktop_config.json`에 추가:
 
 ```json
 {
   "mcpServers": {
-    "meeting-automation-mcp": {
+    "meeting-automation": {
       "command": "python",
-      "args": ["C:\\다운로드경로\\meeting-automation-mcp\\server.py"]
+      "args": ["C:\\경로\\meeting-automation-mcp\\server.py"]
     }
-    // Fireflies, Asana, Notion MCP는 이미 Claude Desktop에서 활성화되어 있다고 가정
   }
 }
 ```
 
-> ⚠️ **중요**: 경로는 반드시 절대경로로 지정하세요.  
-> 예: `C:\\Users\\사용자명\\Downloads\\meeting-automation-mcp\\server.py`
+### Claude Code
 
-### 4. Claude Desktop 재시작
+`~/.claude/settings.json` 또는 프로젝트의 `.mcp.json`에 추가:
 
-## 💡 사용 방법
-
-### 빠른 시작 명령어
-
-Claude에게 이렇게 요청하세요:
-
-```
-📋 회의 검색:
-"10/24 회의 찾아줘"
-
-📊 액션아이템 확인:
-"이 회의 액션아이템 보여줘"
-
-✅ 태스크 생성:
-"액션아이템을 [프로젝트명]에 태스크로 만들어"
-
-📝 문서화:
-"[데이터베이스명]에 회의록 저장해줘"
-
-🚀 전체 자동화:
-"10/24 회의 완전 자동화해줘"
+```json
+{
+  "mcpServers": {
+    "meeting-automation": {
+      "command": "python",
+      "args": ["C:\\경로\\meeting-automation-mcp\\server.py"]
+    }
+  }
+}
 ```
 
-## 🛠️ 제공 도구
+### Cursor
 
-### Fireflies 도구들
+Settings → MCP Servers에서 동일한 command/args로 추가.
 
-#### `Fireflies:search`
-회의 검색 (날짜, 키워드 기반)
+## 도구 목록 (11개)
 
-**문법:**
-```
-- keyword:"검색어" - 키워드 검색
-- from:YYYY-MM-DD - 시작 날짜
-- to:YYYY-MM-DD - 종료 날짜
-- limit:N - 결과 제한
-- scope:title|sentences|all - 검색 범위
-```
+### Setup
 
-**예시:**
-```python
-query="from:2024-10-24 to:2024-10-24"
-query='keyword:"프로젝트" scope:sentences'
-```
+| 도구 | 설명 |
+|------|------|
+| `check_meeting_setup` | VITO/Asana/Notion 연결 상태 확인. 처음 사용 시 호출 |
 
-#### `Fireflies:get_summary`
-회의 요약, 액션아이템, 키워드 가져오기
+### STT (전사)
 
-**파라미터:**
-- `transcriptId`: 회의 ID
+| 도구 | 설명 |
+|------|------|
+| `process_meeting` | 오디오 파일(VITO) 또는 텍스트 입력 처리. 우선순위: text > text_file_path > audio_path |
 
-#### `Fireflies:get_transcript`
-전체 대화 내용 가져오기
+### Asana (태스크 CRUD)
 
-**파라미터:**
-- `transcriptId`: 회의 ID
+| 도구 | 설명 |
+|------|------|
+| `create_meeting_task` | 액션아이템 → Asana 태스크 생성 |
+| `update_meeting_task` | 기존 태스크 수정 (이름, 담당자, 기한 등) |
+| `get_meeting_tasks` | 프로젝트 내 태스크 목록 조회 |
+| `delete_meeting_task` | 태스크 삭제 |
 
-### Asana 도구들
+### Notion (회의록 CRUD)
 
-#### `Asana:asana_typeahead_search`
-프로젝트, 사용자, 태그 등 검색
+| 도구 | 설명 |
+|------|------|
+| `save_meeting_notes` | 회의록 → Notion DB 저장 (13개 속성 자동 매핑) |
+| `update_meeting_notes` | 기존 회의록 수정 |
+| `get_meeting_notes` | 회의록 목록 조회 |
+| `delete_meeting_notes` | 회의록 아카이브(삭제) |
 
-**파라미터:**
-- `resource_type`: "project" | "user" | "task" | "team"
-- `workspace_gid`: 워크스페이스 ID
-- `query`: 검색어
+### Pipeline (원샷)
 
-#### `Asana:asana_create_task`
-태스크 생성
+| 도구 | 설명 |
+|------|------|
+| `run_full_pipeline` | 전사 → Asana → Notion 일괄 처리 (확인 없이 한번에) |
 
-**파라미터:**
-- `name`: 태스크 이름 (필수)
-- `notes`: 태스크 설명
-- `project_id`: 프로젝트 ID
-- `assignee`: 담당자
-- `due_on`: 마감일 (YYYY-MM-DD)
+## 동작 모드
 
-#### `Asana:asana_list_workspaces`
-접근 가능한 워크스페이스 목록 조회
+| 모드 | 사용 방식 | 대상 |
+|------|----------|------|
+| **단계별** | LLM이 도구를 개별 호출, 중간에 사용자 확인 | Claude, GPT-4 등 |
+| **원샷** | `run_full_pipeline` 하나로 일괄 처리 | 자동화 스크립트 |
 
-### Notion 도구들
+## 사용 예시
 
-#### `Notion:notion-search`
-Notion 워크스페이스 검색
-
-**파라미터:**
-- `query`: 검색어
-- `query_type`: "internal" (기본값)
-
-#### `Notion:notion-create-pages`
-페이지 생성
-
-**파라미터:**
-- `parent`: 상위 페이지/데이터베이스
-- `pages`: 페이지 배열
-  - `properties`: 페이지 속성
-  - `content`: Notion Markdown 형식 내용
-
-## 📚 가이드 리소스
-
-서버에 내장된 6가지 가이드:
-
-1. **회의 검색 가이드** (`guide://meeting_search`)
-2. **회의 상세정보 가이드** (`guide://meeting_details`)
-3. **Asana 태스크 생성 가이드** (`guide://create_asana_tasks`)
-4. **Notion 저장 가이드** (`guide://save_to_notion`)
-5. **전체 워크플로우 가이드** (`guide://full_workflow`)
-6. **빠른 실행 명령어** (`guide://quick_commands`)
-
-## 🔄 전체 자동화 워크플로우
+### 텍스트로 회의록 처리 (단계별)
 
 ```
-단계 1: 회의 검색
-  ↓ Fireflies:search
-단계 2: 회의 내용 가져오기
-  ↓ Fireflies:get_summary
-단계 3: Asana 태스크 생성
-  ↓ Asana:asana_typeahead_search (프로젝트 찾기)
-  ↓ Asana:asana_create_task (액션아이템마다)
-단계 4: Notion 문서화
-  ↓ Notion:notion-search (데이터베이스 찾기)
-  ↓ Notion:notion-create-pages (회의록 작성)
-단계 5: 결과 보고
+1. process_meeting(text="회의 내용...") → 전사 텍스트 반환
+2. LLM이 요약 + 액션아이템 추출 → 사용자에게 보여줌
+3. 사용자 OK → create_meeting_task × N회
+4. 사용자 OK → save_meeting_notes
 ```
 
-## 🎓 사용 예시
+### 오디오 파일 전사 (VITO 키 필요)
 
-### 예시 1: 특정 날짜 회의 찾기
 ```
-사용자: "10/24 회의 찾아줘"
-
-Claude가 실행:
-1. Fireflies:search query="from:2024-10-24 to:2024-10-24"
-2. 검색 결과 표시
+1. check_meeting_setup() → 연결 상태 확인
+2. process_meeting(audio_path="회의녹음.m4a") → 전사
+3. 이하 동일
 ```
 
-### 예시 2: 액션아이템을 Asana에 등록
-```
-사용자: "이 회의 액션아이템을 '프로젝트 관리' 프로젝트에 태스크로 만들어"
+### 원샷 파이프라인
 
-Claude가 실행:
-1. Fireflies:get_summary (액션아이템 추출)
-2. Asana:asana_typeahead_search (프로젝트 찾기)
-3. Asana:asana_create_task (각 액션아이템마다)
 ```
-
-### 예시 3: 완전 자동화
-```
-사용자: "10/24 회의 완전 자동화해줘"
-
-Claude가 실행:
-1. 회의 검색
-2. 요약 가져오기
-3. Asana 태스크 생성
-4. Notion 문서 저장
-5. 결과 리포트 제공
+run_full_pipeline(
+    text="회의 내용...",
+    project_id="12345",
+    action_items_json='[{"name":"API 개발","assignee":"kim@co.kr","due_on":"2026-03-20"}]',
+    meeting_title="3월 정기회의",
+    meeting_date="2026-03-17"
+)
 ```
 
-## 🔧 문제 해결
+## Notion DB 속성 매핑
 
-### MCP 서버가 인식되지 않을 때
-```bash
-1. Claude Desktop 완전 종료 (작업 관리자에서 확인)
-2. claude_desktop_config.json 경로 확인
-3. Python 경로가 절대경로인지 확인
-4. Claude Desktop 재시작
+| DB 속성 | 타입 | 도구 파라미터 |
+|---------|------|--------------|
+| 회의명 | title | `title` |
+| 회의일시 | date | `date_str` |
+| 회의장소 | text | `location` |
+| 주관부서 | text | `host_dept` |
+| 참석부서 | text | `attend_dept` |
+| 참석자 | text | `attendees` |
+| 회의안건 | text | `agenda` |
+| 회의내용 | text | `summary` |
+| 결정사항 | text | `decisions` |
+| 기타 | text | `etc` |
+| 작성일 | date | 자동 (오늘 날짜) |
+| 작성자 | text | `author` (기본: DEFAULT_AUTHOR) |
+| URL | url | `url` |
+
+## 에러 코드
+
+| 코드 | 설명 | 대응 |
+|------|------|------|
+| `VITO_NOT_CONFIGURED` | VITO API 키 미설정 | .env에 키 추가 또는 텍스트 입력 사용 |
+| `AUTH_EXPIRED` | API 인증 토큰 만료 | .env에서 토큰 갱신 |
+| `AUTH_FAILED` | 인증 실패 | API 키 확인 |
+| `FILE_NOT_FOUND` | 파일 없음 | 파일 경로 확인 |
+| `UNSUPPORTED_FORMAT` | 미지원 오디오 포맷 | wav, mp3, m4a, flac, aac만 지원 |
+| `FILE_TOO_LARGE` | 파일 1GB 초과 | 파일 분할 |
+| `STT_TIMEOUT` | 전사 10분 초과 | 재시도 또는 짧은 파일 사용 |
+| `RATE_LIMIT` | API 요청 제한 초과 | 자동 재시도 (서버 처리) |
+| `PERMISSION_DENIED` | 접근 권한 없음 | Notion Integration 설정 확인 |
+| `NO_DATABASE_ID` | DB ID 미설정 | .env에 NOTION_DATABASE_ID 추가 |
+| `NO_INPUT` | 입력값 없음 | text, text_file_path, audio_path 중 하나 제공 |
+
+## 프로젝트 구조
+
+```
+meeting-automation-mcp/
+├── server.py          ← FastMCP 엔트리포인트 (도구 등록 + lifespan)
+├── config.py          ← 설정 관리 (.env 기반)
+├── models.py          ← 공통 타입 (ServiceResult, TranscriptResult)
+├── utils.py           ← 공유 유틸리티 (with_retry)
+├── services/
+│   ├── vito.py        ← VITO STT API (전사 + JWT 토큰 관리)
+│   ├── asana.py       ← Asana REST API (태스크 CRUD)
+│   └── notion.py      ← Notion API (회의록 CRUD)
+├── .env.example       ← 환경변수 템플릿
+├── requirements.txt
+└── README.md
 ```
 
-### Fireflies/Asana/Notion 도구가 작동하지 않을 때
-```
-→ 해당 MCP 서버들이 먼저 설치되어 있는지 확인
-→ 각 서버의 API 키가 올바른지 확인
-```
-
-### 도구 목록이 보이지 않을 때
-```bash
-# Claude Desktop 로그 확인
-Windows: %APPDATA%\Claude\logs
-Mac: ~/Library/Logs/Claude
-```
-
-## 📊 성과
-
-**전통적 방식:**
-- 회의 후 후속작업 실행률: ~60%
-- 소요 시간: 회의당 15-30분
-
-**자동화 후:**
-- 회의 후 후속작업 실행률: ~95%
-- 소요 시간: 회의당 2-3분
-
-## 🤝 기여
-
-이슈와 PR 환영합니다!
-
-## 📝 라이센스
+## 라이센스
 
 MIT License
 
-## 👤 제작자
+## 제작자
 
 OK금융그룹 IT기획팀 김정호
-- 역할: 업무 담당자 (개발자 아님)
-- 프로젝트: 차세대 은행 시스템 개발 참여
-- 전문 분야: AI 활용 및 업무 자동화
-
----
-
-**⭐ 이 프로젝트가 도움이 되었다면 Star를 눌러주세요!**

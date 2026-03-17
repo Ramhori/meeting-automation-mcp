@@ -1,687 +1,446 @@
-"""
-Meeting Automation MCP Server
-
-Claude 오케스트레이션 방식으로 Fireflies + Asana + Notion 워크플로우 가이드 제공
-각 MCP 도구를 순차적으로 호출하도록 Claude에게 안내합니다.
-"""
-
-from typing import Any
-import asyncio
-from mcp.server import Server
-from mcp.types import Tool, TextContent
-import mcp.server.stdio
-
-# 서버 인스턴스
-app = Server("meeting-automation")
-
-# 도구 정의
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """워크플로우 가이드 도구 목록"""
-    return [
-        Tool(
-            name="guide_meeting_search",
-            description="""
-회의 검색 가이드
-
-필요한 MCP 도구:
-1. Fireflies:search - 날짜나 키워드로 회의 검색
-
-사용 예시:
-- 날짜 검색: Fireflies:search query="from:2024-10-24 to:2024-10-24"
-- 키워드 검색: Fireflies:search query='keyword:"프로젝트"'
-- 최근 회의: Fireflies:search query="limit:10"
-
-검색 결과에서 meeting ID를 확인하세요.
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query_hint": {
-                        "type": "string",
-                        "description": "검색 조건 힌트 (날짜, 키워드 등)"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="guide_meeting_details",
-            description="""
-회의 상세정보 조회 가이드
-
-필요한 MCP 도구:
-1. Fireflies:get_summary - 회의 요약, 액션아이템, 키워드 가져오기
-2. Fireflies:get_transcript - 전체 대화 내용 가져오기 (선택사항)
-
-사용 순서:
-1. meeting_id 준비 (검색으로 얻은 ID)
-2. Fireflies:get_summary transcriptId="{meeting_id}"
-3. (필요시) Fireflies:get_transcript transcriptId="{meeting_id}"
-
-결과에서:
-- summary.action_items: 액션아이템 목록
-- summary.overview: 회의 요약
-- summary.keywords: 주요 키워드
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "meeting_id": {
-                        "type": "string",
-                        "description": "Fireflies 회의 ID"
-                    }
-                },
-                "required": ["meeting_id"]
-            }
-        ),
-        Tool(
-            name="guide_create_asana_tasks",
-            description="""
-Asana 태스크 생성 가이드
-
-필요한 MCP 도구:
-1. Asana:asana_typeahead_search - 프로젝트 검색
-2. Asana:asana_create_task - 태스크 생성
-
-사용 순서:
-1. 프로젝트 찾기:
-   Asana:asana_typeahead_search 
-   resource_type="project"
-   query="프로젝트명"
-   workspace_gid="{workspace_id}"
-
-2. 액션아이템마다 태스크 생성:
-   Asana:asana_create_task
-   name="액션아이템 내용"
-   project_id="{project_gid}"
-   notes="담당자: XXX\n회의: {회의제목}"
-   due_on="2024-11-01"
-
-팁:
-- 액션아이템에서 담당자 파싱
-- 우선순위 설정 가능
-- 섹션 지정 가능
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action_items": {
-                        "type": "string",
-                        "description": "Fireflies에서 가져온 액션아이템 텍스트"
-                    },
-                    "project_name": {
-                        "type": "string",
-                        "description": "Asana 프로젝트명"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="guide_save_to_notion",
-            description="""
-Notion 회의록 저장 가이드
-
-필요한 MCP 도구:
-1. Notion:notion-search - 데이터베이스 찾기
-2. Notion:notion-create-pages - 페이지 생성
-
-사용 순서:
-1. 데이터베이스 찾기:
-   Notion:notion-search
-   query="회의록" (또는 데이터베이스명)
-   query_type="internal"
-
-2. 페이지 생성:
-   Notion:notion-create-pages
-   parent={data_source_id: "{db_id}"}
-   pages=[{
-     properties: {
-       "제목": "회의제목 - 날짜",
-       "날짜": "2024-10-24",
-       "참석자": "...",
-     },
-     content: "# 회의 요약\n...\n# 액션아이템\n..."
-   }]
-
-팁:
-- 데이터베이스 스키마 먼저 확인 (fetch로)
-- 날짜 속성은 date: 형식 사용
-- Markdown으로 내용 작성
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "meeting_summary": {
-                        "type": "string",
-                        "description": "회의 요약 내용"
-                    },
-                    "database_name": {
-                        "type": "string",
-                        "description": "Notion 데이터베이스명"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="guide_full_workflow",
-            description="""
-전체 워크플로우 실행 가이드
-
-완전 자동화 순서:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-단계 1: 회의 검색
-→ Fireflies:search query="from:YYYY-MM-DD to:YYYY-MM-DD"
-→ meeting_id 확인
-
-단계 2: 회의 내용 가져오기  
-→ Fireflies:get_summary transcriptId="{meeting_id}"
-→ action_items, overview, keywords 추출
-
-단계 3: Asana 태스크 생성
-→ Asana:asana_typeahead_search (프로젝트 찾기)
-→ 액션아이템 파싱 (담당자, 기한 추출)
-→ Asana:asana_create_task (각 아이템마다)
-
-단계 4: Notion 문서화
-→ Notion:notion-search (데이터베이스 찾기)
-→ Notion:notion-create-pages (회의록 작성)
-
-단계 5: 결과 보고
-→ 생성된 태스크 수
-→ Notion 페이지 URL
-→ 액션아이템 담당자별 정리
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-주의사항:
-- 각 단계마다 결과 확인
-- 오류 발생시 해당 단계만 재시도
-- workspace_gid, database_id 미리 확인 필요
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "meeting_date": {
-                        "type": "string",
-                        "description": "회의 날짜 (YYYY-MM-DD)"
-                    },
-                    "asana_project": {
-                        "type": "string",
-                        "description": "Asana 프로젝트명"
-                    },
-                    "notion_database": {
-                        "type": "string",
-                        "description": "Notion 데이터베이스명"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="guide_quick_commands",
-            description="""
-빠른 실행 명령어 모음
-
-📋 회의 검색:
-"10/24 회의 찾아줘"
-→ Fireflies:search query="from:2024-10-24 to:2024-10-24"
-
-📊 액션아이템 확인:
-"이 회의 액션아이템 보여줘" 
-→ Fireflies:get_summary transcriptId="{id}"
-
-✅ 태스크 생성:
-"액션아이템을 {프로젝트}에 태스크로 만들어"
-→ Asana:asana_typeahead_search + asana_create_task
-
-📝 문서화:
-"{데이터베이스}에 회의록 저장해줘"
-→ Notion:notion-search + notion-create-pages
-
-🚀 전체 자동화:
-"10/24 회의 완전 자동화해줘"
-→ guide_full_workflow 참조
-
-💡 팁:
-- workspace_gid: Asana:asana_list_workspaces
-- database_id: Notion:notion-search
-- 담당자 ID: Asana:asana_typeahead_search resource_type="user"
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
-        ),
-        Tool(
-            name="guide_create_word_document",
-            description="""
-Word 문서 생성 가이드 (OK금융그룹 양식)
-
-필요한 MCP 도구:
-1. desktop-commander - Python 스크립트 실행
-
-사용 순서:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. 템플릿 파일 준비
-   - OK금융그룹 회의록 양식 .docx 파일
-   - 경로: /mnt/user-data/uploads/OK금융그룹_회의록__1_.docx
-
-2. Python 스크립트 작성 (python-docx 사용)
-   bash_tool로 실행:
-   
-   python3 << 'PYTHON_EOF'
-   from docx import Document
-   
-   # 템플릿 로드
-   doc = Document('/mnt/user-data/uploads/OK금융그룹_회의록__1_.docx')
-   
-   # 작성일/작성자 수정
-   doc.paragraphs[2].text = '작성일 : YYYY. MM. DD  /  작성자 : 이름'
-   
-   # 첫 번째 테이블 (회의 정보)
-   table1 = doc.tables[0]
-   table1.rows[0].cells[1].text = '회의일시'
-   table1.rows[0].cells[3].text = '회의장소'
-   table1.rows[1].cells[1].text = '주관부서'
-   table1.rows[1].cells[3].text = '참석부서'
-   table1.rows[2].cells[1].text = '참석자'
-   table1.rows[3].cells[1].text = '회의안건'
-   
-   # 두 번째 테이블 (회의내용/결정사항)
-   table2 = doc.tables[1]
-   table2.rows[1].cells[0].text = '회의 내용'
-   table2.rows[3].cells[0].text = '결정사항'
-   
-   # 세 번째 테이블 (기타)
-   table3 = doc.tables[2]
-   table3.rows[1].cells[0].text = '기타사항'
-   
-   # 저장
-   doc.save('/mnt/user-data/outputs/회의록_{날짜}_{제목}.docx')
-   print('완료')
-   PYTHON_EOF
-
-3. 문서 구조
-   - 테이블 0: 회의 기본정보 (4행 4열)
-     * Row 0: 회의일시, 회의장소
-     * Row 1: 주관부서, 참석부서
-     * Row 2: 참석자
-     * Row 3: 회의안건
-   
-   - 테이블 1: 회의내용/결정사항 (4행 1열)
-     * Row 1: 회의내용
-     * Row 3: 결정사항
-   
-   - 테이블 2: 기타 (2행 1열)
-     * Row 1: 기타사항
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-주의사항:
-- bash_tool 사용 (Windows desktop-commander와 경로 호환성)
-- /mnt/user-data/uploads: 업로드 파일
-- /mnt/user-data/outputs: 생성 파일
-- python-docx 라이브러리 필요
-
-예제: Fireflies 회의 → Word 문서
-1. Fireflies:get_summary로 회의 정보 가져오기
-2. 위 스크립트로 양식에 내용 채우기
-3. /mnt/user-data/outputs에 저장
-            """,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "meeting_data": {
-                        "type": "string",
-                        "description": "회의 정보 (제목, 날짜, 참석자, 내용 등)"
-                    },
-                    "template_path": {
-                        "type": "string",
-                        "description": "템플릿 파일 경로",
-                        "default": "/mnt/user-data/uploads/OK금융그룹_회의록__1_.docx"
-                    }
-                }
-            }
-        )
-    ]
-
-# 도구 실행
-@app.call_tool()
-async def call_tool(name: str, arguments: Any) -> list[TextContent]:
-    """가이드 도구 실행 핸들러"""
-    
-    if name == "guide_meeting_search":
-        query_hint = arguments.get("query_hint", "")
-        
-        guide = f"""
-🔍 회의 검색 가이드
-
-검색 조건: {query_hint}
-
-다음 도구를 사용하세요:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Fireflies:search
-query="{query_hint}"
-
-또는 구체적인 검색어:
-- 날짜: "from:2024-10-24 to:2024-10-24"
-- 키워드: 'keyword:"프로젝트회의"'
-- 최근: "limit:20"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-검색 후 meeting_id를 확인하고 다음 단계로 진행하세요.
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
-    elif name == "guide_meeting_details":
-        meeting_id = arguments.get("meeting_id", "")
-        
-        guide = f"""
-📊 회의 상세정보 조회 가이드
-
-Meeting ID: {meeting_id}
-
-1️⃣ 요약 정보 가져오기:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Fireflies:get_summary
-transcriptId="{meeting_id}"
-
-결과에서 확인:
-✓ summary.action_items - 액션아이템
-✓ summary.overview - 회의 요약
-✓ summary.keywords - 주요 키워드
-✓ title - 회의 제목
-✓ dateString - 회의 날짜
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-2️⃣ (선택) 전체 대화 내용:
-
-Fireflies:get_transcript
-transcriptId="{meeting_id}"
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
-    elif name == "guide_create_asana_tasks":
-        action_items = arguments.get("action_items", "")
-        project_name = arguments.get("project_name", "")
-        
-        guide = f"""
-✅ Asana 태스크 생성 가이드
-
-프로젝트: {project_name}
-액션아이템: {action_items[:200]}...
-
-실행 순서:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1️⃣ Workspace ID 확인:
-Asana:asana_list_workspaces
-
-2️⃣ 프로젝트 찾기:
-Asana:asana_typeahead_search
-resource_type="project"
-query="{project_name}"
-workspace_gid="{{workspace_id}}"
-
-3️⃣ 각 액션아이템마다 태스크 생성:
-Asana:asana_create_task
-name="액션아이템 내용"
-project_id="{{project_gid}}"
-notes="담당자: XXX\\n회의일: YYYY-MM-DD"
-due_on="YYYY-MM-DD"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💡 팁:
-- 액션아이템에서 "담당자:" 패턴 찾기
-- 날짜 정보 파싱
-- 우선순위 추가 가능
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
-    elif name == "guide_save_to_notion":
-        meeting_summary = arguments.get("meeting_summary", "")
-        database_name = arguments.get("database_name", "")
-        
-        guide = f"""
-📝 Notion 회의록 저장 가이드
-
-데이터베이스: {database_name}
-회의 요약: {meeting_summary[:200]}...
-
-실행 순서:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1️⃣ 데이터베이스 찾기:
-Notion:notion-search
-query="{database_name}"
-query_type="internal"
-
-2️⃣ (중요) 데이터베이스 구조 확인:
-Notion:notion-fetch
-id="{{database_url}}"
-
-→ 속성명 확인 (제목, 날짜, 참석자 등)
-
-3️⃣ 페이지 생성:
-Notion:notion-create-pages
-parent={{
-  data_source_id: "{{collection_id}}"
-}}
-pages=[{{
-  properties: {{
-    "제목": "회의명 - 날짜",
-    "date:날짜:start": "2024-10-24",
-    "참석자": "..."
-  }},
-  content: "# 회의 요약\\n...\\n\\n# 액션아이템\\n..."
-}}]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💡 주의:
-- data_source_id는 collection:// URL에서 추출
-- 날짜 속성은 date:{속성명}:start 형식
-- content는 Markdown 형식
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
-    elif name == "guide_full_workflow":
-        meeting_date = arguments.get("meeting_date", "")
-        asana_project = arguments.get("asana_project", "")
-        notion_database = arguments.get("notion_database", "")
-        
-        guide = f"""
-🚀 전체 워크플로우 실행 가이드
-
-설정:
-- 회의 날짜: {meeting_date}
-- Asana 프로젝트: {asana_project}
-- Notion 데이터베이스: {notion_database}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 STEP 1: 회의 검색
-Fireflies:search
-query="from:{meeting_date} to:{meeting_date}"
-
-→ meeting_id 저장
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 STEP 2: 회의 내용 가져오기
-Fireflies:get_summary
-transcriptId="{{meeting_id}}"
-
-→ action_items, overview, keywords 저장
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✅ STEP 3: Asana 태스크 생성
-
-3-1. Workspace 확인:
-Asana:asana_list_workspaces
-
-3-2. 프로젝트 찾기:
-Asana:asana_typeahead_search
-resource_type="project"
-query="{asana_project}"
-workspace_gid="{{workspace_id}}"
-
-3-3. 액션아이템 파싱 및 태스크 생성:
-각 액션아이템마다:
-Asana:asana_create_task
-name="[액션아이템 내용]"
-project_id="{{project_gid}}"
-notes="담당자: [추출된 담당자]\\n회의: {{회의제목}}"
-due_on="[기한]"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 STEP 4: Notion 문서화
-
-4-1. 데이터베이스 찾기:
-Notion:notion-search
-query="{notion_database}"
-query_type="internal"
-
-4-2. 스키마 확인:
-Notion:notion-fetch
-id="{{database_url}}"
-
-4-3. 페이지 생성:
-Notion:notion-create-pages
-parent={{data_source_id: "{{collection_id}}"}}
-pages=[{{
-  properties: {{
-    "[제목속성명]": "{{회의제목}} - {meeting_date}",
-    "date:[날짜속성]:start": "{meeting_date}"
-  }},
-  content: "
-# 회의 요약
-{{overview}}
-
-# 액션아이템
-{{action_items}}
-
-# 주요 키워드
-{{keywords}}
-"
-}}]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📈 STEP 5: 결과 정리
-
-생성 완료:
-✓ Asana 태스크 {{count}}개
-✓ Notion 페이지 1개
-
-담당자별 액션아이템:
-[액션아이템을 담당자별로 그룹핑하여 표시]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-각 단계를 순서대로 실행하세요!
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
-    elif name == "guide_quick_commands":
-        guide = """
-⚡ 빠른 실행 명령어 모음
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🔍 자주 쓰는 검색:
-
-"10/24 회의 찾아줘"
-→ Fireflies:search query="from:2024-10-24 to:2024-10-24"
-
-"최근 회의 10개 보여줘"
-→ Fireflies:search query="limit:10"
-
-"프로젝트 회의 검색"
-→ Fireflies:search query='keyword:"프로젝트"'
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 정보 조회:
-
-"이 회의 요약해줘"
-→ Fireflies:get_summary transcriptId="{id}"
-
-"액션아이템 보여줘"
-→ 위 결과에서 summary.action_items
-
-"전체 대화 내용 보여줘"
-→ Fireflies:get_transcript transcriptId="{id}"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✅ 태스크 생성:
-
-"액션아이템을 Asana 태스크로 만들어"
-1. Asana:asana_list_workspaces
-2. Asana:asana_typeahead_search (프로젝트)
-3. Asana:asana_create_task (각 항목)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 문서화:
-
-"회의록 데이터베이스에 저장해줘"
-1. Notion:notion-search query="회의록"
-2. Notion:notion-fetch (스키마 확인)
-3. Notion:notion-create-pages
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🚀 완전 자동화:
-
-"10/24 회의 완전 자동화해줘"
-→ guide_full_workflow 도구 사용
-→ 모든 단계 순차 실행
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💡 필수 ID 찾기:
-
-Workspace ID:
-→ Asana:asana_list_workspaces
-
-Database ID:
-→ Notion:notion-search query="데이터베이스명"
-
-담당자 ID:
-→ Asana:asana_typeahead_search 
-   resource_type="user"
-   query="이름"
-        """
-        
-        return [TextContent(type="text", text=guide)]
-    
+import json
+import logging
+from contextlib import asynccontextmanager
+from datetime import date
+from pathlib import Path
+
+from mcp.server.fastmcp import FastMCP
+
+import config
+from models import ServiceResult
+from services.vito import VitoService
+from services.asana import AsanaService
+from services.notion import NotionService
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(server):
+    """Manage service lifecycle - create on startup, close on shutdown."""
+    services = {
+        "vito": VitoService(),
+        "asana": AsanaService(),
+        "notion": NotionService(),
+    }
+    try:
+        yield services
+    finally:
+        for svc in services.values():
+            await svc.close()
+
+
+mcp = FastMCP("meeting-automation", lifespan=lifespan)
+
+
+# === Setup ===
+
+
+@mcp.tool()
+async def check_meeting_setup() -> str:
+    """Check connection status for all external services (VITO, Asana, Notion).
+    Returns which services are configured and accessible.
+    Call this first to verify your setup before processing meetings."""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+
+    vito_status = await services["vito"].check_connection()
+    asana_status = await services["asana"].check_connection()
+    notion_status = await services["notion"].check_connection()
+
+    return ServiceResult(
+        success=True,
+        data={
+            "vito": vito_status.data,
+            "asana": asana_status.data,
+            "notion": notion_status.data,
+        },
+    ).to_json()
+
+
+# === STT ===
+
+
+@mcp.tool()
+async def process_meeting(
+    audio_path: str = None,
+    text: str = None,
+    text_file_path: str = None,
+) -> str:
+    """Process meeting content for transcription.
+    - audio_path: path to audio file - transcribes via VITO API (requires API key)
+    - text: raw text input (e.g. copied from Clova Note)
+    - text_file_path: path to .txt file
+    Provide exactly one. Priority: text > text_file_path > audio_path.
+    Returns transcript text for LLM to summarize and extract action items."""
+
+    # Priority: text > text_file_path > audio_path
+    if text:
+        return ServiceResult(
+            success=True,
+            data={"text": text, "source": "direct_input"},
+        ).to_json()
+
+    if text_file_path:
+        path = Path(text_file_path)
+        if not path.exists():
+            return ServiceResult(
+                success=False,
+                error_code="FILE_NOT_FOUND",
+                error_message=f"Text file not found: {text_file_path}",
+            ).to_json()
+        try:
+            content = path.read_text(encoding="utf-8")
+            return ServiceResult(
+                success=True,
+                data={"text": content, "source": "text_file"},
+            ).to_json()
+        except Exception as e:
+            return ServiceResult(
+                success=False,
+                error_code="FILE_READ_ERROR",
+                error_message=f"Failed to read file: {e}",
+            ).to_json()
+
+    if audio_path:
+        ctx = mcp.get_context()
+        services = ctx.request_context.lifespan_context
+        result = await services["vito"].transcribe(audio_path)
+        return result.to_json()
+
+    return ServiceResult(
+        success=False,
+        error_code="NO_INPUT",
+        error_message="Provide one of: text, text_file_path, or audio_path.",
+    ).to_json()
+
+
+# === Asana (CRUD) ===
+
+
+@mcp.tool()
+async def create_meeting_task(
+    name: str,
+    project_id: str,
+    assignee: str = None,
+    due_on: str = None,
+    notes: str = None,
+) -> str:
+    """Create a single Asana task from a meeting action item.
+    - name: task title
+    - project_id: Asana project GID (use get_meeting_tasks to find projects)
+    - assignee: assignee email or GID (optional)
+    - due_on: due date in YYYY-MM-DD format (optional)
+    - notes: task description (optional)
+    Returns created task_id. Call multiple times for multiple action items.
+    Only call after user confirms the extracted action items."""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["asana"].create_task(
+        name=name, project_id=project_id, assignee=assignee, due_on=due_on, notes=notes
+    )
+    return result.to_json()
+
+
+@mcp.tool()
+async def update_meeting_task(
+    task_id: str,
+    name: str = None,
+    notes: str = None,
+    due_on: str = None,
+    assignee: str = None,
+) -> str:
+    """Update an existing Asana task. Only provide fields to change.
+    - task_id: Asana task GID (returned by create_meeting_task)"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["asana"].update_task(
+        task_id=task_id, name=name, notes=notes, due_on=due_on, assignee=assignee
+    )
+    return result.to_json()
+
+
+@mcp.tool()
+async def get_meeting_tasks(project_id: str) -> str:
+    """List tasks in an Asana project.
+    - project_id: Asana project GID"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["asana"].get_tasks(project_id=project_id)
+    return result.to_json()
+
+
+@mcp.tool()
+async def delete_meeting_task(task_id: str) -> str:
+    """Delete an Asana task.
+    - task_id: Asana task GID (returned by create_meeting_task)"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["asana"].delete_task(task_id=task_id)
+    return result.to_json()
+
+
+# === Notion (CRUD) ===
+
+
+@mcp.tool()
+async def save_meeting_notes(
+    title: str,
+    date_str: str,
+    location: str = None,
+    host_dept: str = None,
+    attend_dept: str = None,
+    attendees: str = None,
+    agenda: str = None,
+    summary: str = None,
+    decisions: str = None,
+    etc: str = None,
+    author: str = None,
+    url: str = None,
+    database_id: str = None,
+) -> str:
+    """Save meeting notes to Notion database. Returns created page_id.
+    - title: meeting title (회의명)
+    - date_str: meeting date in YYYY-MM-DD format (회의일시)
+    - location: meeting location (회의장소, optional)
+    - host_dept: hosting department (주관부서, optional)
+    - attend_dept: attending departments (참석부서, optional)
+    - attendees: attendee names (참석자, optional)
+    - agenda: meeting agenda (회의안건, optional)
+    - summary: meeting content summary (회의내용, optional)
+    - decisions: decisions and action items (결정사항, optional)
+    - etc: other notes (기타, optional)
+    - author: author name (작성자, defaults to DEFAULT_AUTHOR in .env)
+    - url: related URL (optional)
+    - database_id: overrides NOTION_DATABASE_ID in .env (optional)
+    Today's date is set automatically as 작성일.
+    Only call after user confirms the meeting summary."""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+
+    properties = {
+        "회의명": title,
+        "date:회의일시:start": date_str,
+        "date:회의일시:end": None,
+        "회의장소": location or "",
+        "주관부서": host_dept or "",
+        "참석부서": attend_dept or "",
+        "참석자": attendees or "",
+        "회의안건": agenda or "",
+        "회의내용": summary or "",
+        "결정사항": decisions or "",
+        "기타": etc or "",
+        "date:작성일:start": date.today().isoformat(),
+        "date:작성일:end": None,
+        "작성자": author or config.DEFAULT_AUTHOR or "",
+        "userDefined:URL": url or "",
+    }
+
+    result = await services["notion"].create_page(
+        database_id=database_id or config.NOTION_DATABASE_ID,
+        properties=properties,
+    )
+    return result.to_json()
+
+
+@mcp.tool()
+async def update_meeting_notes(
+    page_id: str,
+    title: str = None,
+    date_str: str = None,
+    location: str = None,
+    host_dept: str = None,
+    attend_dept: str = None,
+    attendees: str = None,
+    agenda: str = None,
+    summary: str = None,
+    decisions: str = None,
+    etc: str = None,
+    author: str = None,
+    url: str = None,
+) -> str:
+    """Update existing Notion meeting notes. Only provide fields to change.
+    - page_id: Notion page ID (returned by save_meeting_notes)"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+
+    properties = {}
+    if title is not None:
+        properties["회의명"] = title
+    if date_str is not None:
+        properties["date:회의일시:start"] = date_str
+    if location is not None:
+        properties["회의장소"] = location
+    if host_dept is not None:
+        properties["주관부서"] = host_dept
+    if attend_dept is not None:
+        properties["참석부서"] = attend_dept
+    if attendees is not None:
+        properties["참석자"] = attendees
+    if agenda is not None:
+        properties["회의안건"] = agenda
+    if summary is not None:
+        properties["회의내용"] = summary
+    if decisions is not None:
+        properties["결정사항"] = decisions
+    if etc is not None:
+        properties["기타"] = etc
+    if author is not None:
+        properties["작성자"] = author
+    if url is not None:
+        properties["userDefined:URL"] = url
+
+    result = await services["notion"].update_page(page_id=page_id, properties=properties)
+    return result.to_json()
+
+
+@mcp.tool()
+async def get_meeting_notes(database_id: str = None) -> str:
+    """List meeting notes from Notion database.
+    - database_id: overrides NOTION_DATABASE_ID in .env (optional)"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["notion"].get_pages(database_id=database_id)
+    return result.to_json()
+
+
+@mcp.tool()
+async def delete_meeting_notes(page_id: str) -> str:
+    """Archive (soft-delete) a Notion meeting notes page.
+    - page_id: Notion page ID (returned by save_meeting_notes)"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    result = await services["notion"].delete_page(page_id=page_id)
+    return result.to_json()
+
+
+# === Pipeline (One-shot) ===
+
+
+@mcp.tool()
+async def run_full_pipeline(
+    audio_path: str = None,
+    text: str = None,
+    text_file_path: str = None,
+    project_id: str = None,
+    action_items_json: str = None,
+    meeting_title: str = None,
+    meeting_date: str = None,
+    location: str = None,
+    host_dept: str = None,
+    attend_dept: str = None,
+    attendees: str = None,
+    agenda: str = None,
+    summary: str = None,
+    decisions: str = None,
+    etc: str = None,
+    author: str = None,
+) -> str:
+    """Run full meeting automation pipeline in one call (no intermediate confirmation).
+    1. Transcribe audio or accept text input
+    2. Create Asana tasks from action_items_json
+    3. Save meeting notes to Notion
+    For step-by-step control with user confirmation, use individual tools instead.
+    - action_items_json: JSON array string, e.g. '[{"name":"...", "assignee":"...", "due_on":"..."}]'"""
+    ctx = mcp.get_context()
+    services = ctx.request_context.lifespan_context
+    pipeline_results = {"steps": []}
+
+    # Step 1: Process meeting input
+    transcript_text = None
+    if text:
+        transcript_text = text
+        pipeline_results["steps"].append({"step": "input", "source": "direct_text"})
+    elif text_file_path:
+        path = Path(text_file_path)
+        if not path.exists():
+            return ServiceResult(
+                success=False,
+                error_code="FILE_NOT_FOUND",
+                error_message=f"Text file not found: {text_file_path}",
+            ).to_json()
+        transcript_text = path.read_text(encoding="utf-8")
+        pipeline_results["steps"].append({"step": "input", "source": "text_file"})
+    elif audio_path:
+        vito_result = await services["vito"].transcribe(audio_path)
+        if not vito_result.success:
+            return vito_result.to_json()
+        transcript_text = vito_result.data["text"]
+        pipeline_results["steps"].append({"step": "transcription", "status": "success"})
     else:
-        raise ValueError(f"알 수 없는 도구: {name}")
+        return ServiceResult(
+            success=False,
+            error_code="NO_INPUT",
+            error_message="Provide one of: text, text_file_path, or audio_path.",
+        ).to_json()
 
-# 서버 실행
-async def main():
-    """서버 시작"""
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
+    # Step 2: Create Asana tasks
+    created_tasks = []
+    if action_items_json and project_id:
+        try:
+            action_items = json.loads(action_items_json)
+        except json.JSONDecodeError as e:
+            return ServiceResult(
+                success=False,
+                error_code="INVALID_JSON",
+                error_message=f"Invalid action_items_json: {e}",
+            ).to_json()
+
+        for item in action_items:
+            task_result = await services["asana"].create_task(
+                name=item.get("name", ""),
+                project_id=project_id,
+                assignee=item.get("assignee"),
+                due_on=item.get("due_on"),
+                notes=item.get("notes"),
+            )
+            if task_result.success:
+                created_tasks.append(task_result.data)
+            else:
+                created_tasks.append({"error": task_result.error_message, "name": item.get("name")})
+
+        pipeline_results["steps"].append({
+            "step": "asana_tasks",
+            "created": len([t for t in created_tasks if "task_id" in t]),
+            "failed": len([t for t in created_tasks if "error" in t]),
+        })
+
+    # Step 3: Save to Notion
+    notion_result = None
+    if meeting_title:
+        properties = {
+            "회의명": meeting_title,
+            "date:회의일시:start": meeting_date or date.today().isoformat(),
+            "date:회의일시:end": None,
+            "회의장소": location or "",
+            "주관부서": host_dept or "",
+            "참석부서": attend_dept or "",
+            "참석자": attendees or "",
+            "회의안건": agenda or "",
+            "회의내용": summary or transcript_text or "",
+            "결정사항": decisions or "",
+            "기타": etc or "",
+            "date:작성일:start": date.today().isoformat(),
+            "date:작성일:end": None,
+            "작성자": author or config.DEFAULT_AUTHOR or "",
+            "userDefined:URL": "",
+        }
+        notion_result = await services["notion"].create_page(
+            database_id=config.NOTION_DATABASE_ID,
+            properties=properties,
         )
+        pipeline_results["steps"].append({
+            "step": "notion",
+            "status": "success" if notion_result.success else "failed",
+            "page_id": notion_result.data.get("page_id") if notion_result.success else None,
+        })
+
+    pipeline_results["transcript_text"] = transcript_text
+    pipeline_results["asana_tasks"] = created_tasks
+    pipeline_results["notion"] = notion_result.data if notion_result and notion_result.success else None
+
+    return ServiceResult(success=True, data=pipeline_results).to_json()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    mcp.run()
