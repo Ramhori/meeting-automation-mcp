@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ramhori-meeting-automation-mcp-badge.png)](https://mseep.ai/app/ramhori-meeting-automation-mcp)
+
 # Meeting Automation MCP Server
 
 회의 녹음/텍스트 → STT 전사 → Asana 태스크 → Notion 회의록까지 자동 처리하는 **범용 MCP 서버**.
